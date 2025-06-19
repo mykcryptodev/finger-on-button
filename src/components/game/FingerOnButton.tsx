@@ -70,9 +70,64 @@ export function FingerOnButton() {
         // Subscribe to realtime updates
         gameService.current.subscribeToGame(
           selectedGameId!,
-          (updatedPlayers: GamePlayer[]) => setPlayers(updatedPlayers),
-          (updatedSession: GameSession) => setGameSession(updatedSession)
+          (updatedPlayers: GamePlayer[]) => {
+            console.log('Players updated via subscription:', updatedPlayers.length, updatedPlayers.map(p => `${p.username}(${p.is_eliminated ? 'elim' : 'active'})`))
+            setPlayers(updatedPlayers)
+          },
+          (updatedSession: GameSession) => {
+            console.log('Session updated via subscription:', updatedSession.status)
+            setGameSession(updatedSession)
+            
+            // Stop updates if game is completed
+            if (updatedSession.status === 'completed') {
+              console.log('Game completed, unsubscribing from updates')
+              gameService.current.unsubscribeFromGame(selectedGameId!)
+            }
+          }
         )
+
+        // Fallback: Periodically refresh both players and session status
+        const refreshInterval = setInterval(async () => {
+          // Only refresh if game is not completed
+          const currentSession = gameSession || session
+          if (currentSession?.status === 'completed') {
+            console.log('Game completed, stopping refresh interval')
+            clearInterval(refreshInterval)
+            return
+          }
+          
+          console.log('Refreshing game state (fallback)')
+          
+          // Always refresh players
+          const freshPlayers = await gameService.current.getAllPlayers(selectedGameId!)
+          console.log('Players refreshed via fallback:', freshPlayers.map(p => `${p.username}(${p.is_eliminated ? 'elim' : 'active'})`))
+          setPlayers(freshPlayers)
+          
+          // Also refresh session status to catch state changes
+          const { data: freshSession } = await gameService.current['supabase']
+            .from('game_sessions')
+            .select('*')
+            .eq('id', selectedGameId!)
+            .single()
+          
+          if (freshSession) {
+            console.log('Session status refreshed:', freshSession.status)
+            setGameSession(freshSession)
+          }
+        }, 2000) // Refresh every 2 seconds
+
+        // Store cleanup function reference
+        const cleanup = () => {
+          clearInterval(refreshInterval)
+          if (user && selectedGameId) {
+            gameService.current.stopHeartbeat(selectedGameId, user.fid)
+          }
+          if (selectedGameId) {
+            gameService.current.unsubscribeFromGame(selectedGameId)
+          }
+        }
+
+        return cleanup
       } catch (err) {
         console.error('Error loading game:', err)
         setError('Failed to load game')
@@ -82,16 +137,6 @@ export function FingerOnButton() {
     }
     
     loadGame()
-    
-    // Cleanup on unmount or game change
-    return () => {
-      if (user && selectedGameId) {
-        gameService.current.stopHeartbeat(selectedGameId, user.fid)
-      }
-      if (selectedGameId) {
-        gameService.current.unsubscribeFromGame(selectedGameId)
-      }
-    }
   }, [selectedGameId, user])
 
   // Handle game state changes
@@ -185,6 +230,7 @@ export function FingerOnButton() {
   )
 
   // Show lobby if game hasn't started
+  console.log('Current game session status:', gameSession.status)
   if (gameSession.status === 'waiting' || gameSession.status === 'scheduled') {
     return (
       <div className="max-w-4xl mx-auto p-4">
@@ -194,8 +240,15 @@ export function FingerOnButton() {
           players={players}
           currentPlayer={currentPlayer}
           onStartGame={async () => {
-            const success = await gameService.current.startGame(gameSession.id)
-            if (!success) {
+            console.log('Start game button clicked')
+            try {
+              const success = await gameService.current.startGame(gameSession.id)
+              console.log('Start game result:', success)
+              if (!success) {
+                setError('Failed to start game')
+              }
+            } catch (err) {
+              console.error('Error in onStartGame:', err)
               setError('Failed to start game')
             }
           }}

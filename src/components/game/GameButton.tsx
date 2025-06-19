@@ -16,7 +16,8 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   // Handle button press
-  const handlePressStart = async () => {
+  const handlePressStart = async (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault()
     if (disabled || !player) return
     
     setIsPressing(true)
@@ -40,7 +41,7 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
     setIsPressing(false)
     setTouchStart(null)
     
-    gameService.stopHeartbeat()
+    gameService.stopHeartbeat(sessionId, player.fid)
     await gameService.stopPressing(sessionId, player.fid)
   }
 
@@ -48,7 +49,7 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
   useEffect(() => {
     return () => {
       if (isPressing) {
-        gameService.stopHeartbeat()
+        gameService.stopHeartbeat(sessionId, player!.fid)
       }
     }
   }, [isPressing, gameService])
@@ -65,10 +66,24 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
     return () => window.removeEventListener('blur', handleBlur)
   }, [isPressing])
 
+  // Prevent context menu on long press
+  useEffect(() => {
+    const button = buttonRef.current
+    if (!button) return
+
+    const preventContextMenu = (e: Event) => {
+      e.preventDefault()
+      return false
+    }
+
+    button.addEventListener('contextmenu', preventContextMenu)
+    return () => button.removeEventListener('contextmenu', preventContextMenu)
+  }, [])
+
   const holdDuration = touchStart ? Math.floor((Date.now() - touchStart) / 1000) : 0
 
   return (
-    <div className="relative">
+    <div className="relative select-none">
       <button
         ref={buttonRef}
         disabled={disabled}
@@ -78,47 +93,81 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
         onTouchStart={handlePressStart}
         onTouchEnd={handlePressEnd}
         onTouchCancel={handlePressEnd}
+        style={{
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
+          WebkitTapHighlightColor: 'transparent',
+          userSelect: 'none'
+        }}
         className={`
-          relative w-64 h-64 rounded-full transition-all duration-200
+          relative w-64 h-64 rounded-full transition-all duration-150 ease-out
+          select-none touch-none outline-none focus:outline-none
           ${disabled 
-            ? 'bg-gray-400 cursor-not-allowed' 
+            ? 'bg-gray-400 cursor-not-allowed shadow-lg' 
             : isPressing 
-              ? 'bg-red-700 scale-95 shadow-inner' 
-              : 'bg-red-600 hover:bg-red-700 shadow-2xl hover:shadow-3xl cursor-pointer'
+              ? 'bg-red-800 scale-90 shadow-inner transform translate-y-1' 
+              : 'bg-red-600 hover:bg-red-700 shadow-2xl hover:shadow-3xl cursor-pointer active:scale-95'
           }
+          border-4 border-red-900
         `}
       >
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-          {disabled ? (
-            <>
-              <span className="text-2xl font-bold">ELIMINATED</span>
-              <span className="text-lg mt-2">Watch the game!</span>
-            </>
-          ) : isPressing ? (
-            <>
-              <span className="text-6xl font-bold">{holdDuration}s</span>
-              <span className="text-lg mt-2">Keep holding!</span>
-            </>
-          ) : (
-            <>
-              <span className="text-2xl font-bold">PRESS & HOLD</span>
-              <span className="text-lg mt-2">Don't let go!</span>
-            </>
+        {/* Inner circle for depth effect */}
+        <div className={`
+          absolute inset-2 rounded-full transition-all duration-150
+          ${disabled 
+            ? 'bg-gray-300' 
+            : isPressing 
+              ? 'bg-red-700 shadow-inner' 
+              : 'bg-red-500 shadow-lg'
+          }
+        `}>
+          {/* Center dot/indicator */}
+          <div className={`
+            absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2
+            w-8 h-8 rounded-full transition-all duration-150
+            ${disabled 
+              ? 'bg-gray-500' 
+              : isPressing 
+                ? 'bg-red-900 scale-75' 
+                : 'bg-red-800'
+            }
+          `} />
+          
+          {/* Timer display when pressing */}
+          {isPressing && !disabled && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-4xl font-bold text-white drop-shadow-lg">
+                {holdDuration}s
+              </span>
+            </div>
           )}
         </div>
         
         {/* Pulse animation when active */}
         {!disabled && isPressing && (
-          <div className="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-25"></div>
+          <div className="absolute inset-0 rounded-full bg-red-400 animate-ping opacity-30"></div>
         )}
       </button>
       
-      {/* Instructions */}
-      {!disabled && !isPressing && (
-        <p className="text-center text-gray-600 mt-4">
-          Click and hold the button to play. Last one holding wins!
-        </p>
-      )}
+      {/* Status text below button */}
+      <div className="text-center mt-6">
+        {disabled ? (
+          <div>
+            <p className="text-xl font-bold text-gray-600">ELIMINATED</p>
+            <p className="text-sm text-gray-500 mt-1">Watch the game!</p>
+          </div>
+        ) : isPressing ? (
+          <div>
+            <p className="text-lg font-semibold text-green-600">Keep holding!</p>
+            <p className="text-sm text-gray-600 mt-1">Don't let go to stay in the game</p>
+          </div>
+        ) : (
+          <div>
+            <p className="text-lg font-semibold text-red-600">Press & Hold</p>
+            <p className="text-sm text-gray-600 mt-1">Touch and hold the button to play</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 } 

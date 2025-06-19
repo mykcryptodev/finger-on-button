@@ -1,0 +1,1 @@
+-- Add missing columns to game_sessions if they don't exist

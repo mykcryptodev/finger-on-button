@@ -138,16 +138,40 @@ export class GameService {
       return null
     }
 
+    // First check if player already exists in this game
+    const { data: existingPlayer } = await this.supabase
+      .from('game_players')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('fid', player.fid)
+      .single()
+
+    if (existingPlayer) {
+      // Player already exists, update their heartbeat and return them
+      await this.supabase
+        .from('game_players')
+        .update({ 
+          last_heartbeat: new Date().toISOString(),
+          // Reset elimination status if they're rejoining
+          is_eliminated: existingPlayer.is_eliminated && existingPlayer.eliminated_at ? existingPlayer.is_eliminated : false
+        })
+        .eq('id', existingPlayer.id)
+      
+      return existingPlayer
+    }
+
+    // Insert new player
     const { data, error } = await this.supabase
       .from('game_players')
-      .upsert({
+      .insert({
         session_id: sessionId,
         fid: player.fid,
         username: player.username,
         display_name: player.display_name,
         pfp_url: player.pfp_url,
         is_pressing: false,
-        is_eliminated: false
+        is_eliminated: false,
+        last_heartbeat: new Date().toISOString()
       })
       .select()
       .single()
@@ -157,7 +181,7 @@ export class GameService {
       return null
     }
 
-    // Update player count
+    // Update player count - this should trigger the real-time subscription
     await this.updatePlayerCount(sessionId)
 
     return data
@@ -256,15 +280,48 @@ export class GameService {
       .from('game_players')
       .select('*')
       .eq('session_id', sessionId)
-      .order('placement', { ascending: true, nullsFirst: false })
-      .order('eliminated_at', { ascending: false, nullsFirst: true })
+      .order('joined_at', { ascending: true }) // Primary sort by join order for stability
 
     if (error) {
       console.error('Error fetching all players:', error)
       return []
     }
 
-    return data || []
+    if (!data) return []
+
+    // Sort players with stable ordering:
+    // 1. Active players first (not eliminated)
+    // 2. Then eliminated players by elimination order
+    // 3. Within each group, maintain join order for stability
+    const sortedPlayers = data.sort((a, b) => {
+      // If one is eliminated and other is not, active player comes first
+      if (a.is_eliminated !== b.is_eliminated) {
+        return a.is_eliminated ? 1 : -1
+      }
+      
+      // If both are eliminated, sort by placement (winner first) then elimination time
+      if (a.is_eliminated && b.is_eliminated) {
+        // If one has placement and other doesn't, placed player comes first
+        if (a.placement !== null && b.placement === null) return -1
+        if (a.placement === null && b.placement !== null) return 1
+        
+        // If both have placements, sort by placement (1st place first)
+        if (a.placement !== null && b.placement !== null) {
+          return a.placement - b.placement
+        }
+        
+        // If neither has placement, sort by elimination time (most recent first)
+        if (a.eliminated_at && b.eliminated_at) {
+          return new Date(b.eliminated_at).getTime() - new Date(a.eliminated_at).getTime()
+        }
+      }
+      
+      // For active players or as fallback, maintain join order
+      return new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
+    })
+
+    console.log('Players sorted:', sortedPlayers.map(p => `${p.username}(${p.is_eliminated ? 'eliminated' : 'active'})`))
+    return sortedPlayers
   }
 
   subscribeToGame(
@@ -274,6 +331,8 @@ export class GameService {
   ) {
     // Unsubscribe from any existing channel for this session
     this.unsubscribeFromGame(sessionId)
+
+    console.log(`Setting up real-time subscription for game: ${sessionId}`)
 
     const channel = this.supabase
       .channel(`game:${sessionId}`)
@@ -285,7 +344,8 @@ export class GameService {
           table: 'game_players',
           filter: `session_id=eq.${sessionId}`
         },
-        async () => {
+        async (payload) => {
+          console.log('Players table change detected:', payload.eventType, (payload.new as any)?.username || (payload.old as any)?.username)
           const players = await this.getAllPlayers(sessionId)
           onPlayersUpdate(players)
         }
@@ -299,12 +359,15 @@ export class GameService {
           filter: `id=eq.${sessionId}`
         },
         async (payload) => {
+          console.log('Game session change detected:', payload.eventType, payload.new)
           if (payload.new) {
             onSessionUpdate(payload.new as GameSession)
           }
         }
       )
-      .subscribe()
+      .subscribe((status) => {
+        console.log(`Subscription status for game ${sessionId}:`, status)
+      })
 
     this.channels.set(sessionId, channel)
   }
@@ -362,7 +425,9 @@ export class GameService {
   }
 
   async startGame(sessionId: string): Promise<boolean> {
-    const { error } = await this.supabase
+    console.log(`Starting game: ${sessionId}`)
+    
+    const { data, error } = await this.supabase
       .from('game_sessions')
       .update({ 
         status: 'active',
@@ -370,8 +435,15 @@ export class GameService {
       })
       .eq('id', sessionId)
       .eq('status', 'waiting')
+      .select()
 
-    return !error
+    if (error) {
+      console.error('Error starting game:', error)
+      return false
+    }
+
+    console.log('Game started successfully:', data)
+    return true
   }
 
   // Clean up stale players
