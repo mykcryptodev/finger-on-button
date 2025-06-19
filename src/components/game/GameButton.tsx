@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { sdk } from '@farcaster/frame-sdk'
 import type { GamePlayer, GameService } from '~/lib/game/gameService'
 
 interface GameButtonProps {
@@ -25,11 +26,39 @@ export function GameButton({ sessionId, player, gameService, disabled, countdown
     }
 
     const countdownEnd = new Date(countdownEndsAt).getTime()
+    let lastHapticSecond = -1
     
-    const updateCountdown = () => {
+    const updateCountdown = async () => {
       const now = Date.now()
       const remaining = Math.max(0, Math.ceil((countdownEnd - now) / 1000))
       setCountdownTime(remaining)
+      
+      // Trigger haptic feedback for each new second
+      if (remaining > 0 && remaining !== lastHapticSecond) {
+        lastHapticSecond = remaining
+        
+        try {
+          // Check if haptics are supported
+          const capabilities = await sdk.getCapabilities()
+          
+          if (capabilities.includes('haptics.impactOccurred')) {
+            // Different haptic intensities based on countdown
+            if (remaining <= 3) {
+              // Heavy haptic for final 3 seconds
+              await sdk.haptics.impactOccurred('heavy')
+            } else if (remaining <= 5) {
+              // Medium haptic for 4-5 seconds
+              await sdk.haptics.impactOccurred('medium')
+            } else {
+              // Light haptic for 6-10 seconds
+              await sdk.haptics.impactOccurred('light')
+            }
+          }
+        } catch (error) {
+          // Haptics not supported or failed, continue silently
+          console.log('Haptic feedback not available:', error)
+        }
+      }
     }
 
     // Update immediately

@@ -473,7 +473,7 @@ export class GameService {
   async startGame(sessionId: string): Promise<boolean> {
     console.log(`Starting game countdown: ${sessionId}`)
     
-    const countdownEndsAt = new Date(Date.now() + 5000) // 5 seconds from now
+    const countdownEndsAt = new Date(Date.now() + 10000) // 10 seconds from now
     
     const { data, error } = await this.supabase
       .from('game_sessions')
@@ -496,7 +496,7 @@ export class GameService {
     // Schedule the countdown completion
     setTimeout(() => {
       this.completeCountdown(sessionId)
-    }, 5000)
+    }, 10000)
     
     return true
   }
