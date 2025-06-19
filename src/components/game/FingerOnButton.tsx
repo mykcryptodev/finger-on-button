@@ -147,7 +147,7 @@ export function FingerOnButton() {
         if (selectedGameId) {
           gameService.current.cleanupStalePlayers(selectedGameId)
         }
-      }, 3000)
+      }, 1000) // Check every 1 second for more responsive cleanup
       
       return () => clearInterval(cleanupInterval)
     }

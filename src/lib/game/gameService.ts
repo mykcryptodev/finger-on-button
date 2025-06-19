@@ -395,14 +395,31 @@ export class GameService {
   }
 
   private async checkForWinner(sessionId: string) {
+    // First check if the game is actually active
+    const { data: session } = await this.supabase
+      .from('game_sessions')
+      .select('status')
+      .eq('id', sessionId)
+      .single()
+
+    if (!session || session.status !== 'active') {
+      console.log(`Skipping winner check - game status is: ${session?.status || 'unknown'}`)
+      return
+    }
+
+    // Use a transaction-like approach to prevent race conditions
     const activePlayers = await this.getActivePlayers(sessionId)
+    
+    console.log(`Checking for winner: ${activePlayers.length} active players`)
     
     if (activePlayers.length === 1) {
       // We have a winner!
       const winner = activePlayers[0]
       
-      // Update the session
-      await this.supabase
+      console.log(`Winner found: ${winner.username}`)
+      
+      // Update the session to completed first
+      const { error: sessionError } = await this.supabase
         .from('game_sessions')
         .update({
           status: 'completed',
@@ -410,6 +427,12 @@ export class GameService {
           winner_fid: winner.fid
         })
         .eq('id', sessionId)
+        .eq('status', 'active') // Only update if still active (prevents race condition)
+
+      if (sessionError) {
+        console.error('Error updating session:', sessionError)
+        return
+      }
 
       // Update winner's placement
       await this.supabase
@@ -421,6 +444,28 @@ export class GameService {
       await this.supabase.rpc('update_player_placements', { 
         session_id: sessionId 
       })
+    } else if (activePlayers.length === 0) {
+      // No active players - this shouldn't happen but let's handle it
+      console.log('No active players found - checking if game should end')
+      
+      // Check if there are any non-eliminated players at all
+      const allPlayers = await this.getAllPlayers(sessionId)
+      const nonEliminatedPlayers = allPlayers.filter(p => !p.is_eliminated)
+      
+      if (nonEliminatedPlayers.length === 0) {
+        console.log('All players eliminated - ending game without winner')
+        
+        // End the game without a winner
+        await this.supabase
+          .from('game_sessions')
+          .update({
+            status: 'completed',
+            ended_at: new Date().toISOString(),
+            winner_fid: null
+          })
+          .eq('id', sessionId)
+          .eq('status', 'active')
+      }
     }
   }
 
