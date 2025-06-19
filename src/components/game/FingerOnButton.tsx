@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useMiniApp } from '@neynar/react'
+import { sdk } from '@farcaster/frame-sdk'
 import { GameService, type GameSession, type GamePlayer } from '~/lib/game/gameService'
 import { GameHub } from './GameHub'
 import { GameLobby } from './GameLobby'
@@ -70,8 +71,13 @@ export function FingerOnButton() {
         // Subscribe to realtime updates
         gameService.current.subscribeToGame(
           selectedGameId!,
-          (updatedPlayers: GamePlayer[]) => {
+          async (updatedPlayers: GamePlayer[]) => {
             console.log('Players updated via subscription:', updatedPlayers.length, updatedPlayers.map(p => `${p.username}(${p.is_eliminated ? 'elim' : 'active'})`))
+            
+            // Check for eliminations and trigger haptic feedback
+            await checkForEliminations(updatedPlayers, players)
+            
+            // Update players state
             setPlayers(updatedPlayers)
           },
           (updatedSession: GameSession) => {
@@ -101,6 +107,10 @@ export function FingerOnButton() {
           // Always refresh players
           const freshPlayers = await gameService.current.getAllPlayers(selectedGameId!)
           console.log('Players refreshed via fallback:', freshPlayers.map(p => `${p.username}(${p.is_eliminated ? 'elim' : 'active'})`))
+          
+          // Check for eliminations and trigger haptic feedback
+          await checkForEliminations(freshPlayers, players)
+          
           setPlayers(freshPlayers)
           
           // Also refresh session status to catch state changes
@@ -152,6 +162,60 @@ export function FingerOnButton() {
       return () => clearInterval(cleanupInterval)
     }
   }, [gameSession?.status, selectedGameId, currentPlayer])
+
+  // Function to detect eliminations and trigger haptic feedback
+  const checkForEliminations = async (newPlayers: GamePlayer[], oldPlayers: GamePlayer[]) => {
+    // Only check for eliminations during active gameplay
+    if (!gameSession || (gameSession.status !== 'active' && gameSession.status !== 'starting')) {
+      return
+    }
+
+    // Find players who were just eliminated (not eliminated before, but eliminated now)
+    const newlyEliminated = newPlayers.filter(newPlayer => {
+      const oldPlayer = oldPlayers.find(old => old.fid === newPlayer.fid)
+      return newPlayer.is_eliminated && oldPlayer && !oldPlayer.is_eliminated
+    })
+
+    // Check if we just became the winner (only 1 active player left and it's us)
+    const activePlayers = newPlayers.filter(p => !p.is_eliminated)
+    const weAreWinner = activePlayers.length === 1 && activePlayers[0]?.fid === user?.fid
+
+    // Trigger haptic feedback for eliminations
+    if (newlyEliminated.length > 0) {
+      console.log('Players eliminated:', newlyEliminated.map(p => p.username))
+      
+      // Special case: if we just won, trigger success haptic
+      if (weAreWinner) {
+        try {
+          const capabilities = await sdk.getCapabilities()
+          
+          if (capabilities.includes('haptics.notificationOccurred')) {
+            // Success haptic for winning!
+            await sdk.haptics.notificationOccurred('success')
+          }
+        } catch (error) {
+          console.log('Victory haptic feedback not available:', error)
+        }
+      } else {
+        // Regular elimination haptics for other players
+        for (const eliminatedPlayer of newlyEliminated) {
+          // Don't trigger haptic for our own elimination
+          if (eliminatedPlayer.fid !== user?.fid) {
+            try {
+              const capabilities = await sdk.getCapabilities()
+              
+              if (capabilities.includes('haptics.notificationOccurred')) {
+                // Use warning haptic for eliminations to create tension
+                await sdk.haptics.notificationOccurred('warning')
+              }
+            } catch (error) {
+              console.log('Elimination haptic feedback not available:', error)
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Show game hub if no game selected
   if (!selectedGameId) {
