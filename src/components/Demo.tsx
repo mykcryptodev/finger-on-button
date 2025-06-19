@@ -21,7 +21,6 @@ import {
   useConnection as useSolanaConnection,
   useWallet as useSolanaWallet,
 } from '@solana/wallet-adapter-react';
-import { useHasSolanaProvider } from "./providers/SafeFarcasterSolanaProvider";
 import { ShareButton } from "./ui/Share";
 
 import { config } from "~/components/providers/WagmiProvider";
@@ -62,9 +61,6 @@ export default function Demo(
 
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const hasSolanaProvider = useHasSolanaProvider();
-  const solanaWallet = useSolanaWallet();
-  const { publicKey: solanaPublicKey } = solanaWallet;
 
   useEffect(() => {
     console.log("isSDKLoaded", isSDKLoaded);
@@ -231,6 +227,12 @@ export default function Demo(
             <div className="text-center w-full max-w-md mx-auto">
               <p className="text-lg mb-2">Put your content here!</p>
               <p className="text-sm text-gray-500">Powered by Neynar 🪐</p>
+              {context?.user && (
+                <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+                  <p className="text-sm text-gray-600">Connected as:</p>
+                  <p className="font-semibold">@{context.user.username}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
