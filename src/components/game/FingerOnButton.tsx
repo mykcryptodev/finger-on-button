@@ -82,6 +82,10 @@ export function FingerOnButton() {
           },
           (updatedSession: GameSession) => {
             console.log('Session updated via subscription:', updatedSession.status)
+            
+            // Check for victory when game completes
+            checkForVictory(updatedSession)
+            
             setGameSession(updatedSession)
             
             // Stop updates if game is completed
@@ -182,19 +186,16 @@ export function FingerOnButton() {
 
     // Trigger haptic feedback for eliminations
     if (newlyEliminated.length > 0) {
-      console.log('Players eliminated:', newlyEliminated.map(p => p.username))
-      
       // Special case: if we just won, trigger success haptic
       if (weAreWinner) {
         try {
           const capabilities = await sdk.getCapabilities()
           
           if (capabilities.includes('haptics.notificationOccurred')) {
-            // Success haptic for winning!
             await sdk.haptics.notificationOccurred('success')
           }
         } catch (error) {
-          console.log('Victory haptic feedback not available:', error)
+          // Haptics not supported or failed, continue silently
         }
       } else {
         // Regular elimination haptics for other players
@@ -205,14 +206,28 @@ export function FingerOnButton() {
               const capabilities = await sdk.getCapabilities()
               
               if (capabilities.includes('haptics.notificationOccurred')) {
-                // Use warning haptic for eliminations to create tension
                 await sdk.haptics.notificationOccurred('warning')
               }
             } catch (error) {
-              console.log('Elimination haptic feedback not available:', error)
+              // Haptics not supported or failed, continue silently
             }
           }
         }
+      }
+    }
+  }
+
+  // Function to check for victory when game status changes
+  const checkForVictory = async (session: GameSession) => {
+    if (session.status === 'completed' && session.winner_fid === user?.fid) {
+      try {
+        const capabilities = await sdk.getCapabilities()
+        
+        if (capabilities.includes('haptics.notificationOccurred')) {
+          await sdk.haptics.notificationOccurred('success')
+        }
+      } catch (error) {
+        // Haptics not supported or failed, continue silently
       }
     }
   }
