@@ -18,6 +18,8 @@ export interface GameSession {
   max_players: number
   created_by_fid: number | null
   is_featured: boolean
+  requires_deposit?: boolean
+  entry_fee_wei?: string
 }
 
 export interface GamePlayer {

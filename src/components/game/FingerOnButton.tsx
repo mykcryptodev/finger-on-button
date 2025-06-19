@@ -3,12 +3,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMiniApp } from '@neynar/react'
 import { sdk } from '@farcaster/frame-sdk'
+import { formatEther } from 'viem'
 import { GameService, type GameSession, type GamePlayer } from '~/lib/game/gameService'
+import { ThirdwebDepositService } from '~/lib/game/thirdwebDepositService'
+import { useFingerOnTheButtonContract } from '~/lib/contracts/fingerOnTheButton'
 import { GameHub } from './GameHub'
 import { GameLobby } from './GameLobby'
 import { GameButton } from './GameButton'
 import { PlayersList } from './PlayersList'
 import { GameOver } from './GameOver'
+import { DepositInterface } from './DepositInterface'
 import { Button } from '~/components/ui/Button'
 
 export function FingerOnButton() {
@@ -20,8 +24,21 @@ export function FingerOnButton() {
   const [currentPlayer, setCurrentPlayer] = useState<GamePlayer | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [hasDeposited, setHasDeposited] = useState(false)
+  const [entryFee, setEntryFee] = useState<bigint>(0n)
   
   const gameService = useRef(new GameService())
+  const depositService = useRef(new ThirdwebDepositService())
+  const contract = useFingerOnTheButtonContract()
+
+  // Helper function to go back to game hub
+  const goBackToHub = () => {
+    // Remove game ID from URL
+    const url = new URL(window.location.href)
+    url.searchParams.delete('game')
+    window.history.pushState({}, '', url.toString())
+    setSelectedGameId(null)
+  }
 
   // Check for game ID in URL params (for shared links)
   useEffect(() => {
@@ -55,14 +72,39 @@ export function FingerOnButton() {
         
         setGameSession(session)
         
-        // Join the game
-        const player = await gameService.current.joinGame(selectedGameId!, {
-          fid: user!.fid,
-          username: user!.username || `user${user!.fid}`,
-          display_name: user!.displayName || undefined,
-          pfp_url: user!.pfpUrl || undefined
-        })
-        setCurrentPlayer(player)
+        // Get entry fee from contract
+        if (contract) {
+          try {
+            const fee = await contract.read.ENTRY_FEE() as bigint
+            setEntryFee(fee)
+          } catch (err) {
+            console.error('Error getting entry fee:', err)
+          }
+        }
+        
+        // Check if player has already deposited
+        console.log('Checking deposit for game:', selectedGameId, 'user:', user!.fid)
+        console.log('Session requires_deposit:', session.requires_deposit)
+        
+        const deposited = await depositService.current.hasPlayerDeposited(selectedGameId!, user!.fid)
+        console.log('Has deposited:', deposited)
+        setHasDeposited(deposited)
+        
+        // Default to requiring deposit if the field doesn't exist (migration not applied)
+        const requiresDeposit = session.requires_deposit ?? true
+        console.log('Requires deposit (with default):', requiresDeposit)
+        
+        // Only join if player has deposited or game doesn't require deposit
+        if (deposited || !requiresDeposit) {
+          // Join the game
+          const player = await gameService.current.joinGame(selectedGameId!, {
+            fid: user!.fid,
+            username: user!.username || `user${user!.fid}`,
+            display_name: user!.displayName || undefined,
+            pfp_url: user!.pfpUrl || undefined
+          })
+          setCurrentPlayer(player)
+        }
         
         // Load initial players
         const allPlayers = await gameService.current.getAllPlayers(selectedGameId!)
@@ -234,7 +276,13 @@ export function FingerOnButton() {
 
   // Show game hub if no game selected
   if (!selectedGameId) {
-    return <GameHub onSelectGame={setSelectedGameId} />
+    return <GameHub onSelectGame={(gameId) => {
+      // Update URL to include game ID
+      const url = new URL(window.location.href)
+      url.searchParams.set('game', gameId)
+      window.history.pushState({}, '', url.toString())
+      setSelectedGameId(gameId)
+    }} />
   }
 
   if (isLoading) {
@@ -254,7 +302,7 @@ export function FingerOnButton() {
         <div className="text-center text-red-600">
           <p className="text-xl font-semibold mb-2">Error</p>
           <p className="mb-4">{error || 'Failed to load game'}</p>
-          <Button onClick={() => setSelectedGameId(null)}>Back to Games</Button>
+          <Button onClick={goBackToHub}>Back to Games</Button>
         </div>
       </div>
     )
@@ -266,7 +314,7 @@ export function FingerOnButton() {
         <div className="text-center">
           <p className="text-xl font-semibold mb-2">Please sign in</p>
           <p className="text-gray-600 mb-4">You need to be signed in to play</p>
-          <Button onClick={() => setSelectedGameId(null)}>Back to Games</Button>
+          <Button onClick={goBackToHub}>Back to Games</Button>
         </div>
       </div>
     )
@@ -299,7 +347,7 @@ export function FingerOnButton() {
           )}
         </div>
         <Button 
-          onClick={() => setSelectedGameId(null)}
+          onClick={goBackToHub}
           className="text-sm"
         >
           Leave Game
@@ -314,11 +362,35 @@ export function FingerOnButton() {
     return (
       <div className="max-w-4xl mx-auto p-4">
         {gameHeader}
+        
+        {/* Show deposit interface if player hasn't deposited */}
+        {!hasDeposited && gameSession.requires_deposit !== false && (
+          <DepositInterface
+            gameId={selectedGameId}
+            sessionId={selectedGameId}
+            fid={user.fid}
+            entryFee={entryFee}
+            onDepositComplete={() => {
+              setHasDeposited(true)
+              // Ensure game ID is in URL before reloading
+              const url = new URL(window.location.href)
+              url.searchParams.set('game', selectedGameId)
+              window.history.replaceState({}, '', url.toString())
+              window.location.reload()
+            }}
+          />
+        )}
+        
         <GameLobby
           session={gameSession}
           players={players}
           currentPlayer={currentPlayer}
           onStartGame={async () => {
+            if (!hasDeposited && gameSession.requires_deposit !== false) {
+              alert('Please deposit first to join the game!')
+              return
+            }
+            
             console.log('Start game button clicked')
             try {
               const success = await gameService.current.startGame(gameSession.id)
@@ -380,9 +452,7 @@ export function FingerOnButton() {
           session={gameSession}
           players={players}
           currentPlayer={currentPlayer}
-          onNewGame={async () => {
-            setSelectedGameId(null)
-          }}
+          onNewGame={async () => goBackToHub()}
         />
       </div>
     )
@@ -390,36 +460,38 @@ export function FingerOnButton() {
 
   // Active game
   return (
-    <div className="max-w-4xl mx-auto p-4">
-      {gameHeader}
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold mb-2">Finger on the Button!</h1>
-        <p className="text-gray-600">
-          {currentPlayer?.is_eliminated 
-            ? "You're out! Watch who wins..." 
-            : "Keep your finger on the button to stay in the game!"}
-        </p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-8">
-        <div className="flex items-center justify-center">
-          <GameButton
-            sessionId={gameSession.id}
-            player={currentPlayer}
-            gameService={gameService.current as any}
-            disabled={currentPlayer?.is_eliminated || false}
-            countdownEndsAt={gameSession.countdown_ends_at}
-          />
+    <>
+      <div className="max-w-4xl mx-auto p-4">
+        {gameHeader}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold mb-2">Finger on the Button!</h1>
+          <p className="text-gray-600">
+            {currentPlayer?.is_eliminated 
+              ? "You're out! Watch who wins..." 
+              : "Keep your finger on the button to stay in the game!"}
+          </p>
         </div>
 
-        <div>
-          <PlayersList
-            players={players}
-            currentPlayerFid={currentPlayer?.fid}
-            showEliminated={true}
-          />
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="flex items-center justify-center">
+            <GameButton
+              sessionId={gameSession.id}
+              player={currentPlayer}
+              gameService={gameService.current as any}
+              disabled={currentPlayer?.is_eliminated || false}
+              countdownEndsAt={gameSession.countdown_ends_at}
+            />
+          </div>
+
+          <div>
+            <PlayersList
+              players={players}
+              currentPlayerFid={currentPlayer?.fid}
+              showEliminated={true}
+            />
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 } 
