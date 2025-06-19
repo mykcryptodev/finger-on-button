@@ -8,12 +8,38 @@ interface GameButtonProps {
   player: GamePlayer | null
   gameService: GameService
   disabled: boolean
+  countdownEndsAt?: string | null
 }
 
-export function GameButton({ sessionId, player, gameService, disabled }: GameButtonProps) {
+export function GameButton({ sessionId, player, gameService, disabled, countdownEndsAt }: GameButtonProps) {
   const [isPressing, setIsPressing] = useState(false)
   const [touchStart, setTouchStart] = useState<number | null>(null)
+  const [countdownTime, setCountdownTime] = useState<number>(0)
   const buttonRef = useRef<HTMLButtonElement>(null)
+
+  // Handle countdown timer
+  useEffect(() => {
+    if (!countdownEndsAt) {
+      setCountdownTime(0)
+      return
+    }
+
+    const countdownEnd = new Date(countdownEndsAt).getTime()
+    
+    const updateCountdown = () => {
+      const now = Date.now()
+      const remaining = Math.max(0, Math.ceil((countdownEnd - now) / 1000))
+      setCountdownTime(remaining)
+    }
+
+    // Update immediately
+    updateCountdown()
+
+    // Update every 100ms for smooth countdown
+    const interval = setInterval(updateCountdown, 100)
+
+    return () => clearInterval(interval)
+  }, [countdownEndsAt])
 
   // Handle button press
   const handlePressStart = async (e: React.MouseEvent | React.TouchEvent) => {
@@ -151,7 +177,20 @@ export function GameButton({ sessionId, player, gameService, disabled }: GameBut
       
       {/* Status text below button */}
       <div className="text-center mt-6">
-        {disabled ? (
+        {countdownTime > 0 ? (
+          <div>
+            <p className={`text-lg font-semibold transition-colors duration-300 ${
+              countdownTime <= 1 ? 'text-red-600' : 
+              countdownTime <= 2 ? 'text-orange-500' : 
+              'text-blue-600'
+            }`}>
+              Game starts in {countdownTime}
+            </p>
+            <p className="text-sm text-gray-600 mt-1">
+              {isPressing ? 'Great! Keep holding!' : 'Hold the button now or be eliminated!'}
+            </p>
+          </div>
+        ) : disabled ? (
           <div>
             <p className="text-xl font-bold text-gray-600">ELIMINATED</p>
             <p className="text-sm text-gray-500 mt-1">Watch the game!</p>

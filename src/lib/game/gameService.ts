@@ -2,7 +2,7 @@ import { createClient } from '~/utils/supabase/client'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 export type GameType = 'public' | 'daily' | 'private'
-export type GameStatus = 'scheduled' | 'waiting' | 'active' | 'completed'
+export type GameStatus = 'scheduled' | 'waiting' | 'starting' | 'active' | 'completed'
 
 export interface GameSession {
   id: string
@@ -11,6 +11,7 @@ export interface GameSession {
   share_code: string | null
   scheduled_start_time: string | null
   started_at: string | null
+  countdown_ends_at: string | null
   ended_at: string | null
   winner_fid: number | null
   total_players: number
@@ -395,14 +396,14 @@ export class GameService {
   }
 
   private async checkForWinner(sessionId: string) {
-    // First check if the game is actually active
+    // First check if the game is actually active or starting
     const { data: session } = await this.supabase
       .from('game_sessions')
       .select('status')
       .eq('id', sessionId)
       .single()
 
-    if (!session || session.status !== 'active') {
+    if (!session || (session.status !== 'active' && session.status !== 'starting')) {
       console.log(`Skipping winner check - game status is: ${session?.status || 'unknown'}`)
       return
     }
@@ -427,7 +428,7 @@ export class GameService {
           winner_fid: winner.fid
         })
         .eq('id', sessionId)
-        .eq('status', 'active') // Only update if still active (prevents race condition)
+        .in('status', ['active', 'starting']) // Can complete from either active or starting
 
       if (sessionError) {
         console.error('Error updating session:', sessionError)
@@ -464,31 +465,93 @@ export class GameService {
             winner_fid: null
           })
           .eq('id', sessionId)
-          .eq('status', 'active')
+          .in('status', ['active', 'starting'])
       }
     }
   }
 
   async startGame(sessionId: string): Promise<boolean> {
-    console.log(`Starting game: ${sessionId}`)
+    console.log(`Starting game countdown: ${sessionId}`)
+    
+    const countdownEndsAt = new Date(Date.now() + 5000) // 5 seconds from now
     
     const { data, error } = await this.supabase
       .from('game_sessions')
       .update({ 
-        status: 'active',
-        started_at: new Date().toISOString()
+        status: 'starting',
+        started_at: new Date().toISOString(),
+        countdown_ends_at: countdownEndsAt.toISOString()
       })
       .eq('id', sessionId)
       .eq('status', 'waiting')
       .select()
 
     if (error) {
-      console.error('Error starting game:', error)
+      console.error('Error starting game countdown:', error)
       return false
     }
 
-    console.log('Game started successfully:', data)
+    console.log('Game countdown started successfully:', data)
+    
+    // Schedule the countdown completion
+    setTimeout(() => {
+      this.completeCountdown(sessionId)
+    }, 5000)
+    
     return true
+  }
+
+  // Complete the countdown and eliminate players not holding the button
+  async completeCountdown(sessionId: string): Promise<void> {
+    console.log(`Completing countdown for game: ${sessionId}`)
+    
+    // First check if the game is still in starting status
+    const { data: session } = await this.supabase
+      .from('game_sessions')
+      .select('status')
+      .eq('id', sessionId)
+      .single()
+
+    if (!session || session.status !== 'starting') {
+      console.log(`Countdown completion cancelled - game status is: ${session?.status || 'unknown'}`)
+      return
+    }
+
+    // Eliminate all players who are not pressing the button
+    const { error: eliminateError } = await this.supabase
+      .from('game_players')
+      .update({
+        is_eliminated: true,
+        eliminated_at: new Date().toISOString()
+      })
+      .eq('session_id', sessionId)
+      .eq('is_pressing', false)
+      .eq('is_eliminated', false)
+
+    if (eliminateError) {
+      console.error('Error eliminating players after countdown:', eliminateError)
+      return
+    }
+
+    // Update game status to active
+    const { error: statusError } = await this.supabase
+      .from('game_sessions')
+      .update({ 
+        status: 'active',
+        countdown_ends_at: null
+      })
+      .eq('id', sessionId)
+      .eq('status', 'starting')
+
+    if (statusError) {
+      console.error('Error updating game to active status:', statusError)
+      return
+    }
+
+    console.log('Countdown completed and game is now active')
+    
+    // Check for winner after eliminations
+    await this.checkForWinner(sessionId)
   }
 
   // Clean up stale players

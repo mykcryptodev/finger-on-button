@@ -257,6 +257,41 @@ export function FingerOnButton() {
     )
   }
 
+  // Show countdown screen when game is starting
+  if (gameSession.status === 'starting') {
+    return (
+      <div className="max-w-4xl mx-auto p-4">
+        {gameHeader}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold mb-2">Get Ready!</h1>
+          <p className="text-gray-600">
+            Hold the button when the countdown ends or you'll be eliminated!
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="flex items-center justify-center">
+            <GameButton
+              sessionId={gameSession.id}
+              player={currentPlayer}
+              gameService={gameService.current as any}
+              disabled={currentPlayer?.is_eliminated || false}
+              countdownEndsAt={gameSession.countdown_ends_at}
+            />
+          </div>
+
+          <div>
+            <PlayersList
+              players={players}
+              currentPlayerFid={currentPlayer?.fid}
+              showEliminated={true}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Show game over screen if completed
   if (gameSession.status === 'completed') {
     return (
@@ -294,6 +329,7 @@ export function FingerOnButton() {
             player={currentPlayer}
             gameService={gameService.current as any}
             disabled={currentPlayer?.is_eliminated || false}
+            countdownEndsAt={gameSession.countdown_ends_at}
           />
         </div>
 
